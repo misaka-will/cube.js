@@ -196,7 +196,7 @@ export class ClickHouseQuery extends BaseQuery {
       datesFrom.push(from);
       datesTo.push(to);
     });
-    return `SELECT parseDateTimeBestEffort(arrayJoin(['${datesFrom.join('\',\'')}'])) as date_from, parseDateTimeBestEffort(arrayJoin(['${datesTo.join('\',\'')}'])) as date_to`;
+    return `WITH arrayJoin((['${datesFrom.join('\',\'')}'],['${datesTo.join('\',\'')}'])) as tpl SELECT parseDateTimeBestEffort(tpl.1) as date_from, parseDateTimeBestEffort(tpl.2) as date_to`;
   }
 
   concatStringsSql(strings) {
@@ -208,14 +208,27 @@ export class ClickHouseQuery extends BaseQuery {
     return `toUnixTimestamp(${this.nowTimestampSql()})`;
   }
 
+  hllInit(sql) {
+    return `uniqHLL12State(${sql})`;
+  }
+
+  hllMerge(sql) {
+    return `uniqHLL12Merge(${sql})`;
+  }
+
+  countDistinctApprox(sql) {
+    return `uniq(${sql})`;
+  }
+
   preAggregationLoadSql(cube, preAggregation, tableName) {
     const sqlAndParams = this.preAggregationSql(cube, preAggregation);
-    if (!preAggregation.indexes) {
-      throw new UserError('ClickHouse doesn\'t support pre-aggregations without indexes');
+    let orderByKey = `tuple()`;
+    if (preAggregation.indexes) {
+      const firstIndexName = Object.keys(preAggregation.indexes)[0];
+      const indexColumns = this.evaluateIndexColumns(cube, preAggregation.indexes[firstIndexName]);
+      orderByKey = `(${indexColumns.join(', ')})`
     }
-    const firstIndexName = Object.keys(preAggregation.indexes)[0];
-    const indexColumns = this.evaluateIndexColumns(cube, preAggregation.indexes[firstIndexName]);
-    return [`CREATE TABLE ${tableName} ENGINE = MergeTree() ORDER BY (${indexColumns.join(', ')}) ${this.asSyntaxTable} ${sqlAndParams[0]}`, sqlAndParams[1]];
+    return [`CREATE TABLE ${tableName} ENGINE = MergeTree() ORDER BY ${orderByKey} ${this.asSyntaxTable} ${sqlAndParams[0]}`, sqlAndParams[1]];
   }
 
   createIndexSql(indexName, tableName, escapedColumns) {
